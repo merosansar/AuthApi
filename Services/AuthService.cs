@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 
 namespace AuthApi.Services
 {
@@ -20,7 +21,7 @@ namespace AuthApi.Services
             _configuration = configuration;
         }
 
-        public async Task<string?> LoginAsync(UserDto request)
+        public async Task<TokenResponseDto?> LoginAsync(UserDto request)
         {
             var user = _context.Users.FirstOrDefault(u => u.UserName == request.UserName);
             if (user.UserName != request.UserName)
@@ -31,8 +32,9 @@ namespace AuthApi.Services
             {
                 return null; 
             }
+            var response = new TokenResponseDto { RefreshToken = await GenerateAndSaveRefreshToken(user), AccessToken = CreateToken(user) };
 
-            return CreateToken(user);
+            return response;
         }
 
         public async Task<User?> RegisterAsync(UserDto request)
@@ -51,7 +53,54 @@ namespace AuthApi.Services
             return user;
 
         }
+        public async Task<TokenResponseDto?> RefreshTokenAsync(RefreshTokenRequestDto request)
+        {
+            var user =await ValidateRefreshToken(request.UserId, request.RefreshToken);
+            if (user is null)
+            {
+                return null;
+            }
+           return await CreateTokenResponse(user);
 
+        }
+
+        private async Task<TokenResponseDto> CreateTokenResponse(User response)
+        {
+            var tokenResponse = new TokenResponseDto
+            {
+                AccessToken = CreateToken(response),
+                RefreshToken = GenerateAndSaveRefreshToken(response).Result
+            };
+            return  tokenResponse;
+        }
+
+        private async Task<User?> ValidateRefreshToken(int UserId ,string refreshToken)
+        {
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == UserId);
+            if (user is null || user.RefreshToken != refreshToken || user.RefreshTokenExpiryDate <= DateTime.UtcNow)
+            {
+                return null;
+            }
+            return user;
+        }       
+        private string GenerateRefreshToken()               
+        {
+            var randomNumber = new byte[32];
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(randomNumber);
+            return Convert.ToBase64String(randomNumber);
+        }
+        private async Task<string> GenerateAndSaveRefreshToken(User user)
+        {
+            var refreshToken = GenerateRefreshToken();
+           
+            
+            user.RefreshToken = refreshToken;
+            user.RefreshTokenExpiryDate = DateTime.UtcNow.AddDays(7);
+          
+            await _context.SaveChangesAsync();
+            return refreshToken;
+        }
         private  string CreateToken(User user)
         {
             var claims = new List<Claim>
@@ -77,5 +126,7 @@ namespace AuthApi.Services
 
 
         }
+
+      
     }
 }
